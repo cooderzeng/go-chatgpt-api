@@ -33,7 +33,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	err := router.Run(":" + port)
+	err := router.Run()
 	if err != nil {
 		log.Fatal("Failed to start server: " + err.Error())
 	}
