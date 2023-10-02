@@ -2,12 +2,15 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 	"strings"
 
+	http "github.com/bogdanfinn/fhttp"
 	"github.com/gin-gonic/gin"
+
+	"github.com/linweiyuan/go-chatgpt-api/api"
 	"github.com/linweiyuan/go-chatgpt-api/api/chatgpt"
+	"github.com/linweiyuan/go-chatgpt-api/api/imitate"
 	"github.com/linweiyuan/go-chatgpt-api/api/platform"
 	_ "github.com/linweiyuan/go-chatgpt-api/env"
 	"github.com/linweiyuan/go-chatgpt-api/middleware"
@@ -20,22 +23,27 @@ func init() {
 
 func main() {
 	router := gin.Default()
-	router.Use(middleware.CORSMiddleware())
-	router.Use(middleware.CheckHeaderMiddleware())
+
+	router.Use(middleware.CORS())
+	router.Use(middleware.Authorization())
 
 	setupChatGPTAPIs(router)
-
 	setupPlatformAPIs(router)
+	setupPandoraAPIs(router)
+	setupImitateAPIs(router)
+	router.NoRoute(api.Proxy)
 
-	router.NoRoute(handleFallbackRoute)
+	router.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, api.ReadyHint)
+	})
 
-	port := os.Getenv("GO_CHATGPT_API_PORT")
+	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 	err := router.Run()
 	if err != nil {
-		log.Fatal("Failed to start server: " + err.Error())
+		log.Fatal("failed to start server: " + err.Error())
 	}
 }
 
@@ -43,32 +51,12 @@ func setupChatGPTAPIs(router *gin.Engine) {
 	chatgptGroup := router.Group("/chatgpt")
 	{
 		chatgptGroup.POST("/login", chatgpt.Login)
+		chatgptGroup.POST("/backend-api/login", chatgpt.Login) // add support for other projects
 
-		conversationsGroup := chatgptGroup.Group("/conversations")
-		{
-			conversationsGroup.GET("", chatgpt.GetConversations)
-
-			// PATCH is official method, POST is added for Java support
-			conversationsGroup.PATCH("", chatgpt.ClearConversations)
-			conversationsGroup.POST("", chatgpt.ClearConversations)
-		}
-
-		conversationGroup := chatgptGroup.Group("/conversation")
+		conversationGroup := chatgptGroup.Group("/backend-api/conversation")
 		{
 			conversationGroup.POST("", chatgpt.CreateConversation)
-			conversationGroup.POST("/gen_title/:id", chatgpt.GenerateTitle)
-			conversationGroup.GET("/:id", chatgpt.GetConversation)
-
-			// rename or delete conversation use a same API with different parameters
-			conversationGroup.PATCH("/:id", chatgpt.UpdateConversation)
-			conversationGroup.POST("/:id", chatgpt.UpdateConversation)
-
-			conversationGroup.POST("/message_feedback", chatgpt.FeedbackMessage)
 		}
-
-		// misc
-		chatgptGroup.GET("/models", chatgpt.GetModels)
-		chatgptGroup.GET("/accounts/check", chatgpt.GetAccountCheck)
 	}
 }
 
@@ -76,44 +64,31 @@ func setupPlatformAPIs(router *gin.Engine) {
 	platformGroup := router.Group("/platform")
 	{
 		platformGroup.POST("/login", platform.Login)
+		platformGroup.POST("/v1/login", platform.Login)
 
 		apiGroup := platformGroup.Group("/v1")
 		{
-			apiGroup.GET("/models", platform.ListModels)
-			apiGroup.GET("/models/:model", platform.RetrieveModel)
-			apiGroup.POST("/completions", platform.CreateCompletions)
 			apiGroup.POST("/chat/completions", platform.CreateChatCompletions)
-			apiGroup.POST("/edits", platform.CreateEdit)
-			apiGroup.POST("/images/generations", platform.CreateImage)
-			apiGroup.POST("/embeddings", platform.CreateEmbeddings)
-			apiGroup.GET("/files", platform.ListFiles)
-			apiGroup.POST("/moderations", platform.CreateModeration)
-		}
-
-		dashboardGroup := platformGroup.Group("/dashboard")
-		{
-			billingGroup := dashboardGroup.Group("/billing")
-			{
-				billingGroup.GET("/credit_grants", platform.GetCreditGrants)
-				billingGroup.GET("/subscription", platform.GetSubscription)
-			}
-
-			userGroup := dashboardGroup.Group("/user")
-			{
-				userGroup.GET("/api_keys", platform.GetApiKeys)
-			}
+			apiGroup.POST("/completions", platform.CreateCompletions)
 		}
 	}
 }
 
-func handleFallbackRoute(c *gin.Context) {
-	path := c.Request.URL.Path
+func setupPandoraAPIs(router *gin.Engine) {
+	router.Any("/api/*path", func(c *gin.Context) {
+		c.Request.URL.Path = strings.ReplaceAll(c.Request.URL.Path, "/api", "/chatgpt/backend-api")
+		router.HandleContext(c)
+	})
+}
 
-	if strings.HasPrefix(path, "/chatgpt") {
-		trimmedPath := strings.TrimPrefix(path, "/chatgpt")
-		c.Request.URL.Path = trimmedPath
-		chatgpt.Fallback(c)
-	} else {
-		c.JSON(http.StatusNotFound, gin.H{"message": "Route not found"})
+func setupImitateAPIs(router *gin.Engine) {
+	imitateGroup := router.Group("/imitate")
+	{
+		imitateGroup.POST("/login", chatgpt.Login)
+
+		apiGroup := imitateGroup.Group("/v1")
+		{
+			apiGroup.POST("/chat/completions", imitate.CreateChatCompletions)
+		}
 	}
 }
